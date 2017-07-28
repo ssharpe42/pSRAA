@@ -3,24 +3,23 @@ library(dplyr)
 library(baseballr)
 library(pitchRx)
 library(lme4)
+library(mgcv)
 library(dbConnect)
 #scrape(start = "2015-01-01", end = "2015-12-01", connect = db$con)
 
-
 db <- src_sqlite("/Users/Sam/Desktop/Baseball Data/pitchRx.sqlite3")
-run = tbl(db, 'runner')
-run_date <- mutate(run, date = substr(gameday_link, 15L, -10L))
-compute(run_date, name = 'run_date', temporary = FALSE)
-pitch = tbl(db, 'pitch')
-pitch_date <- mutate(pitch, date = substr(gameday_link, 15L, -10L))
-compute(pitch_date, name = 'pitch_date', temporary = FALSE)
-action = tbl(db, 'action')
-action_date <- mutate(action, date = substr(gameday_link, 15L, -10L))
-compute(action_date, name = 'action_date', temporary = FALSE)
-atbat = tbl(db, 'atbat')
-atbat_date <- mutate(atbat, date = substr(gameday_link, 15L, -10L))
-compute(atbat_date, name = 'atbat_date', temporary = FALSE)
-
+# run = tbl(db, 'runner')
+# run_date <- mutate(run, date = substr(gameday_link, 15L, -10L))
+# compute(run_date, name = 'run_date', temporary = FALSE)
+# pitch = tbl(db, 'pitch')
+# pitch_date <- mutate(pitch, date = substr(gameday_link, 15L, -10L))
+# compute(pitch_date, name = 'pitch_date', temporary = FALSE)
+# action = tbl(db, 'action')
+# action_date <- mutate(action, date = substr(gameday_link, 15L, -10L))
+# compute(action_date, name = 'action_date', temporary = FALSE)
+# atbat = tbl(db, 'atbat')
+# atbat_date <- mutate(atbat, date = substr(gameday_link, 15L, -10L))
+# compute(atbat_date, name = 'atbat_date', temporary = FALSE)
 
 # dbSendQuery(db$con, 'CREATE INDEX date_idx ON run_date(date)')
 # dbSendQuery(db$con, 'CREATE INDEX date_idx2 ON pitch_date(date)')
@@ -32,7 +31,7 @@ compute(atbat_date, name = 'atbat_date', temporary = FALSE)
 # dbSendQuery(db$con, 'CREATE INDEX action_idx ON action_date(gameday_link, num)')
 # dbSendQuery(db$con, 'CREATE INDEX atbat_idx ON atbat_date(gameday_link, num)')
 
-setwd('/Users/Sam/Desktop/Projects/cFIP/')
+setwd("~/Desktop/Projects/pSRAA")
 #Retrosheet event files
 dbRetro=dbConnect(MySQL(),user="root",
                   host="localhost",
@@ -73,6 +72,8 @@ retro_sb = mutate(retro,
            pitch_no = nchar(Pitches)-1,
            Count = paste0(BALLS_CT,'-',STRIKES_CT),
            Bases = paste0(as.integer(BASE1_RUN_ID!=''),as.integer(BASE2_RUN_ID!=''),as.integer(BASE3_RUN_ID!='')),
+           LeadBase = ifelse(BASE3_RUN_ID!='','Third',
+                             ifelse(BASE2_RUN_ID!='','Second','First')),
            Season = substr(GAME_ID, 4, 7),
            gameday_link = paste0('gid_',substr(GAME_ID, 4,7),'_',substr(GAME_ID, 8,9),'_',substr(GAME_ID, 10,11),'_',
                                  tolower(AWAY_TEAM_ID),'mlb', '_',tolower(substr(GAME_ID, 1,3)),'mlb','_', pmax(as.integer(substr(GAME_ID,12,12)),1))) %>%
@@ -86,7 +87,7 @@ retro_sb = mutate(retro,
 
 
 #### Load in Jonathan Judge's cFIP- statistic  ####
-cfip = readRDS('cFIP2016.RDS')
+cfip = readRDS('data/cFIP2016.RDS')
 
 #### Jonathan Judge, Harry Pavlidis and Dan Turkenkopf's Swipe Rate Above Average (SRAA) ####
 
@@ -182,8 +183,15 @@ SB.pitchfx = inner_join(SB.pitch,
            zone_x = ifelse(px <=0, 'RHH Side','LHH Side' ),
            des_short = ifelse(grepl('Blocked|Dirt',des), 'Dirt', 
                               ifelse(grepl('Pitchout',des), 'Pitchout',
-                                     ifelse(grepl('Swing|Bunt', des),'Swinging Strike','Strike/Ball')))) %>%
+                                     ifelse(grepl('Swing|Bunt|Foul', des),'Swinging Strike','Strike/Ball')))) %>%
     filter(!is.na(start_speed))
+
+
+#Smoothed estimated SB probability based on pitch location
+loc_mod = gam(LeadSB ~ s(px, pz,by = as.factor(BAT_HAND_CD)) , family=binomial, data = SB.pitchfx)
+#Assign probabilities from locations to all SB attempts
+SB.pitchfx = mutate(SB.pitchfx, loc_prob = predict(loc_mod, SB.pitchfx, type = 'response'))
+
 
 #Current SRAA model
 SRAA.pitch.glmer <- glmer(LeadSB ~ factor(INN_CT) + PARK_ID+cFIP+
@@ -191,7 +199,7 @@ SRAA.pitch.glmer <- glmer(LeadSB ~ factor(INN_CT) + PARK_ID+cFIP+
                           data=SB.pitchfx, family=binomial(link='probit'), nAGQ=0)
 
 #New SRAA with pitch context
-PSRAA.glmer<- glmer(LeadSB ~ factor(INN_CT)  +start_speed+zone_z+ zone_x*BAT_HAND_CD+des_short+
+PSRAA.glmer<- glmer(LeadSB ~ factor(INN_CT)  +start_speed+loc_prob+des_short+LeadBase+
                         (1|PIT_ID) + (1 |POS2_FLD_ID) + (1|LeadRunner), 
                     data=SB.pitchfx, family=binomial(link='probit'), nAGQ=0)
 
@@ -214,13 +222,16 @@ SRAA.RUN= data.frame(SRAA = pnorm(ranef(SRAA.pitch.glmer)$LeadRunner[,1]+ null) 
 #Calculate Pitcher PSRAA (with pitch)
 PSRAA.int = summary(PSRAA.glmer)$coefficients['(Intercept)','Estimate']
 speed.coef = summary(PSRAA.glmer)$coefficients['start_speed','Estimate']
-#pz.coef = summary(PSRAA.glmer)$coefficients['pz','Estimate']
-null <- PSRAA.int +  median(SB.pitchfx$start_speed)*speed.coef
+loc.coef = summary(PSRAA.glmer)$coefficients['loc_prob','Estimate']
 
+#Calculate null probability
+null <- PSRAA.int +  median(SB.pitchfx$start_speed)*speed.coef + median(SB.pitchfx$loc_prob)*loc.coef
+
+#Calculate Pitcher pSRAA
 PSRAA.PIT = data.frame(PSRAA = pnorm(ranef(PSRAA.glmer)$PIT_ID[,1] + null) - pnorm(null) )%>%
     mutate(PIT_ID = rownames(ranef(PSRAA.glmer)$PIT_ID))
 
-#Calculate Catcher PSRAA (with pitch)
+#Calculate Catcher pSRAA (with pitch)
 PSRAA.CAT= data.frame(PSRAA = pnorm(ranef(PSRAA.glmer)$POS2_FLD_ID[,1]+ null) - pnorm(null)) %>%
     mutate(POS2_FLD_ID = rownames(ranef(PSRAA.glmer)$POS2_FLD_ID))
 
@@ -229,48 +240,6 @@ PSRAA.RUN= data.frame(PSRAA = pnorm(ranef(PSRAA.glmer)$LeadRunner[,1]+ null) - p
     mutate(LeadRunner = rownames(ranef(PSRAA.glmer)$LeadRunner))
 
 
-#Count Attempts per Pitcher, Catcher, Batter
-Att.PIT = count(SB.pitchfx, PIT_ID)
-Att.CAT= count(SB.pitchfx, POS2_FLD_ID)
-Att.RUN = count(SB.pitchfx, LeadRunner)
 
 
-
-# Compare New Method
-CatcherMetrics = inner_join(PSRAA.CAT, SRAA.CAT) %>%
-    left_join(., ids, by = c('POS2_FLD_ID'='key_retro')) %>%
-    left_join(., Att.CAT) %>%
-    mutate(SRAAm = (SRAA - wtd.mean(SRAA,n))/sqrt(wtd.var(SRAA,n)),
-        PSRAAm = (PSRAA - wtd.mean(PSRAA,n))/sqrt(wtd.var(PSRAA,n))) %>%
-    mutate(Change = PSRAAm-SRAAm)
-
-RunnerMetrics = inner_join(PSRAA.RUN, SRAA.RUN) %>%
-    left_join(., ids, by = c('LeadRunner'='key_retro')) %>%
-    left_join(., Att.RUN) %>%
-    mutate(SRAAm = (SRAA - wtd.mean(SRAA,n))/sqrt(wtd.var(SRAA,n)),
-           PSRAAm = (PSRAA - wtd.mean(PSRAA,n))/sqrt(wtd.var(PSRAA,n))) %>%
-    mutate(Change = PSRAAm-SRAAm)
-
-
-
-
-
-######### Summary Statistics & Graphs ###########
-library(ggplot2)
-library(ggthemes)
-library(scales)
-
-
-#SB vs Pitch Speed
-group_by(SB.pitchfx, start_speed = floor(start_speed/10)*10) %>%
-    summarise(SB = mean(LeadSB),n())
-
-ggplot(SB.pitchfx) + 
-    stat_smooth(aes(x = start_speed, y =LeadSB)) +
-    theme_fivethirtyeight()+
-    scale_y_continuous(labels = percent, name = 'SB Success Rate') +
-    scale_x_continuous(labels = function(x) paste(x, 'mph'), name = '\nPitch Speed')+
-    theme(text = element_text(size = 16),
-          axis.title = element_text(size = 16))+
-    ggtitle('Smoothed SB Success Rate vs. Pitch Speed')
 
