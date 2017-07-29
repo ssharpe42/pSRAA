@@ -126,8 +126,35 @@ ggplot(PlayerMetricsCompare )+
           axis.title = element_text(size = 16),
           legend.key.width = unit(1, "cm"))+
     ggtitle('SRAA vs. pSRAA by Position')
-#Compare old vs new metrics
-RunnerMetrics %>%
-    ggplot()+
-    geom_point(aes(x = SRAA, y = PSRAA), size = 1) +
-    geom_abline(slope = 1, intercept = 0)
+
+
+#Top 10 
+Top10 = PlayerMetricsCompare %>%
+    group_by(Position) %>%
+    filter(Attempts>=5) %>%
+    arrange(-PSRAA) %>%
+    filter(row_number()<=10) %>%
+    ungroup
+
+CTop10 = PlayerMetricsCompare %>%
+    filter(Position=='Catcher') %>%
+    arrange(PSRAA) %>%
+    filter(row_number()<=10) %>%
+    select( Catcher = Name, PSRAA) %>%
+    mutate(PSRAA = percent_format()(PSRAA))
+PTop10 =PlayerMetricsCompare %>%
+    filter(Position=='Pitcher') %>%
+    arrange(PSRAA) %>%
+    filter(Attempts>=5) %>%
+    filter(row_number()<=10) %>%
+    select( Pitcher = Name, PSRAA)%>%
+    mutate(PSRAA = percent_format()(PSRAA))
+RTop10 = PlayerMetricsCompare %>%
+    filter(Position=='Runner') %>%
+    arrange(-PSRAA) %>%
+    filter(row_number()<=10) %>%
+    select( Runner = Name, PSRAA) %>%
+    mutate(PSRAA = percent_format()(PSRAA))
+
+FinalTop10 = bind_cols(CTop10, PTop10, RTop10)
+write.csv(FinalTop10, 'Top10', row.names = F)
