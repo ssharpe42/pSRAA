@@ -11,7 +11,7 @@ Att.PIT = count(SB.pitchfx, PIT_ID)
 Att.CAT= count(SB.pitchfx, POS2_FLD_ID)
 Att.RUN = count(SB.pitchfx, LeadRunner)
 
-# Compare New Method
+# Compare Old and New Methods as well as their Z-scores
 CatcherMetrics = inner_join(PSRAA.CAT, SRAA.CAT) %>%
     left_join(., ids, by = c('POS2_FLD_ID'='key_retro')) %>%
     left_join(., Att.CAT) %>%
@@ -71,6 +71,7 @@ strikzone <- data.frame(
     y=c(kzone_bot , kzone_top,kzone_top, kzone_bot ,kzone_bot )
 )
 
+#Plot pitch location smoothed probability
 ggplot(zone, aes(x = px, y = pz)) + 
     geom_tile(aes(fill = pSB)) +
     facet_wrap(~BAT_HAND_CD)+
@@ -128,33 +129,56 @@ ggplot(PlayerMetricsCompare )+
     ggtitle('SRAA vs. pSRAA by Position')
 
 
-#Top 10 
-Top10 = PlayerMetricsCompare %>%
-    group_by(Position) %>%
-    filter(Attempts>=5) %>%
-    arrange(-PSRAA) %>%
-    filter(row_number()<=10) %>%
-    ungroup
+#Run Value
+# 2016 CS/SB Run Values from http://www.fangraphs.com/guts.aspx?type=cn
+# SB = .2
+# CS = -.410
+PlayerMetricsCompare = PlayerMetricsCompare %>% 
+    mutate(pSRrAA = PSRAA*(.2-(-.410))*Attempts)
 
+
+#Top 10 
 CTop10 = PlayerMetricsCompare %>%
     filter(Position=='Catcher') %>%
-    arrange(PSRAA) %>%
+    arrange(pSRrAA) %>%
     filter(row_number()<=10) %>%
-    select( Catcher = Name, PSRAA) %>%
-    mutate(PSRAA = percent_format()(PSRAA))
+    select( Catcher = Name, pSRAA = PSRAA,pSRrAA) %>%
+    mutate( pSRAA = percent_format()( pSRAA), pSRrAA = round(pSRrAA, 2))
 PTop10 =PlayerMetricsCompare %>%
     filter(Position=='Pitcher') %>%
-    arrange(PSRAA) %>%
-    filter(Attempts>=5) %>%
+    arrange(pSRrAA) %>%
     filter(row_number()<=10) %>%
-    select( Pitcher = Name, PSRAA)%>%
-    mutate(PSRAA = percent_format()(PSRAA))
+    select( Pitcher = Name,pSRAA = PSRAA,pSRrAA) %>%
+    mutate( pSRAA = percent_format()( pSRAA), pSRrAA = round(pSRrAA, 2))
 RTop10 = PlayerMetricsCompare %>%
     filter(Position=='Runner') %>%
-    arrange(-PSRAA) %>%
+    arrange(-pSRrAA) %>%
     filter(row_number()<=10) %>%
-    select( Runner = Name, PSRAA) %>%
-    mutate(PSRAA = percent_format()(PSRAA))
+    select( Runner = Name, pSRAA = PSRAA,pSRrAA) %>%
+    mutate( pSRAA = percent_format()( pSRAA), pSRrAA = round(pSRrAA, 2))
+
+CBot10 = PlayerMetricsCompare %>%
+    filter(Position=='Catcher') %>%
+    arrange(pSRrAA) %>%
+    filter(row_number()>=n()-9) %>%
+    select( Catcher = Name, pSRAA = PSRAA,pSRrAA) %>%
+    mutate( pSRAA = percent_format()( pSRAA),pSRrAA = round(pSRrAA, 2))
+PBot10 =PlayerMetricsCompare %>%
+    filter(Position=='Pitcher') %>%
+    arrange(pSRrAA) %>%
+    filter(row_number()>=n()-9) %>%
+    select( Pitcher = Name, pSRAA = PSRAA,pSRrAA) %>%
+    mutate( pSRAA = percent_format()( pSRAA),pSRrAA = round(pSRrAA, 2))
+RBot10 = PlayerMetricsCompare %>%
+    filter(Position=='Runner') %>%
+    arrange(-pSRrAA) %>%
+    filter(row_number()>=n()-9) %>%
+    select( Runner = Name, pSRAA = PSRAA,pSRrAA) %>%
+    mutate( pSRAA = percent_format()( pSRAA), pSRrAA = round(pSRrAA, 2))
 
 FinalTop10 = bind_cols(CTop10, PTop10, RTop10)
-write.csv(FinalTop10, 'Top10', row.names = F)
+FinalBottom10 = bind_cols(CBot10, PBot10, RBot10)
+write.csv(FinalTop10, 'data/Top10.csv', row.names = F)
+write.csv(FinalBottom10, 'data/Bottom10.csv', row.names = F)
+
+
